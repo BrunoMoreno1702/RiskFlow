@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 import pyodbc
@@ -23,7 +23,7 @@ def get_connection():
     trust_server_certificate = os.getenv("SQL_TRUST_SERVER_CERTIFICATE", "yes")
 
     if not database:
-        raise ValueError("A variável SQL_DATABASE não foi configurada no arquivo .env")
+        raise ValueError("A variavel SQL_DATABASE nao foi configurada no arquivo .env")
 
     connection_parts = [
         f"DRIVER={{{driver}}}",
@@ -33,6 +33,7 @@ def get_connection():
         f"TrustServerCertificate={trust_server_certificate}",
     ]
 
+    # Em ambiente local, prioriza autenticacao integrada do Windows.
     if trusted_connection == "yes":
         connection_parts.append("Trusted_Connection=yes")
     else:

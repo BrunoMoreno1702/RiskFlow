@@ -1,4 +1,4 @@
-import random
+﻿import random
 from datetime import datetime, timedelta
 
 MERCHANTS = {
@@ -13,6 +13,7 @@ MERCHANTS = {
 }
 
 
+# Gera horario aleatorio dentro da faixa esperada para cada tipo de transacao.
 def _random_timestamp(min_hour, max_hour, max_day_offset):
     return datetime.now().replace(
         hour=random.randint(min_hour, max_hour),
@@ -45,10 +46,11 @@ def generate_normal_transaction(customer_id):
     return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=0)
 
 
+# Fraudes sao geradas com ticket mais alto para aumentar sinal no treino supervisionado.
 def generate_fraud_transaction(customer_id):
     merchant = random.choice(list(MERCHANTS.keys()))
-    amount = round(random.uniform(1000, 5000), 2)
-    timestamp = _random_timestamp(min_hour=2, max_hour=5, max_day_offset=90)
+    amount = round(random.uniform(4000, 8000), 2)
+    timestamp = _random_timestamp(min_hour=8, max_hour=22, max_day_offset=90)
 
     return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=1)
 
@@ -60,7 +62,7 @@ def generate_customer_transactions(customer_id):
     for _ in range(normal_count):
         transactions.append(generate_normal_transaction(customer_id))
 
-    # Mantemos 20% dos clientes com fraudes para preservar a distribuição histórica do dataset.
+    # Mantem uma proporcao de fraude para nao perder representatividade da classe positiva.
     if random.random() < 0.2:
         fraud_count = random.randint(3, 7)
         for _ in range(fraud_count):

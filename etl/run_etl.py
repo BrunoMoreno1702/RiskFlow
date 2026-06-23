@@ -1,36 +1,34 @@
-import argparse
+﻿import argparse
 
 from ingestion.fetch_data import fetch_data
 from ingestion.load_origin import load_transactions_origin
 from processing.load_prod import load_transactions_prod
 
 
-def run_etl(customers=100):
+# Orquestra um ciclo completo: extrair, carregar origem e publicar camada de consumo.
+def run_etl(customers=None):
     print("Iniciando ETL...")
 
-    # Etapa 1: extração de transações brutas da API.
     print("Extraindo dados da API...")
     df = fetch_data(customers=customers)
 
-    # Etapa 2: carga incremental na origem.
     print("Carregando dados na transactions_origin...")
-    load_transactions_origin(df)
+    inserted_transaction_ids = load_transactions_origin(df)
 
-    # Etapa 3: transformação e carga da camada de consumo.
     print("Tratando e carregando dados na transactions_prod...")
-    load_transactions_prod()
+    load_transactions_prod(transaction_ids=inserted_transaction_ids)
 
     print("ETL finalizado com sucesso.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Executa o pipeline ETL de transações.")
+    parser = argparse.ArgumentParser(description="Executa o pipeline ETL de transacoes.")
 
     parser.add_argument(
         "--customers",
         type=int,
-        default=100,
-        help="Quantidade de clientes para buscar na API."
+        default=None,
+        help="Quantidade de clientes para buscar na API. Quando omitido, usa o padrao da API."
     )
 
     args = parser.parse_args()
