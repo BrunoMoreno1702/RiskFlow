@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 import pandas as pd
@@ -11,10 +11,13 @@ load_dotenv(BASE_DIR / ".env")
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/transactions")
 
 
-def _fetch_payload(customers):
+def _fetch_payload(customers=None):
+    # Quando customers nao vem, a API aplica a regra padrao dela.
+    params = {"customers": customers} if customers is not None else None
+
     response = requests.get(
         API_URL,
-        params={"customers": customers},
+        params=params,
         timeout=30
     )
 
@@ -22,15 +25,15 @@ def _fetch_payload(customers):
     return response.json()
 
 
+# Concentramos validacoes de contrato aqui para evitar quebra nas etapas seguintes.
 def _payload_to_dataframe(payload):
-    # A chave "data" é o contrato da API para o pipeline de ingestão.
     if "data" not in payload:
-        raise KeyError("A resposta da API não contém a chave 'data'.")
+        raise KeyError("A resposta da API nao contem a chave 'data'.")
 
     dataframe = pd.DataFrame(payload["data"])
 
     if dataframe.empty:
-        raise ValueError("A API retornou uma lista vazia de transações.")
+        raise ValueError("A API retornou uma lista vazia de transacoes.")
 
     dataframe["customer_id"] = dataframe["customer_id"].astype(str)
     dataframe["transaction_id"] = dataframe["transaction_id"].astype(str)
@@ -38,7 +41,7 @@ def _payload_to_dataframe(payload):
     return dataframe
 
 
-def fetch_data(customers=100):
+def fetch_data(customers=None):
     payload = _fetch_payload(customers=customers)
     df = _payload_to_dataframe(payload)
 
@@ -46,8 +49,8 @@ def fetch_data(customers=100):
 
 
 if __name__ == "__main__":
-    df = fetch_data(customers=100)
+    df = fetch_data()
 
     print(df.head())
-    print("\nTotal de transações:", len(df))
-    print("Clientes únicos:", df["customer_id"].nunique())
+    print("\nTotal de transacoes:", len(df))
+    print("Clientes unicos:", df["customer_id"].nunique())
