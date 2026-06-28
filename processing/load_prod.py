@@ -10,7 +10,8 @@ SELECT
     origin.merchant,
     origin.category,
     origin.[timestamp] AS data_hora,
-    origin.is_fraud
+    origin.is_fraud,
+    origin.card_network
 FROM transactions_origin origin
 WHERE NOT EXISTS (
     SELECT 1
@@ -27,7 +28,8 @@ SELECT
     origin.merchant,
     origin.category,
     origin.[timestamp] AS data_hora,
-    origin.is_fraud
+    origin.is_fraud,
+    origin.card_network
 FROM transactions_origin origin
 WHERE origin.transaction_id IN ({placeholders})
 AND NOT EXISTS (
@@ -48,9 +50,10 @@ INSERT INTO transactions_prod (
     hora_transacao,
     dia_transacao,
     mes_transacao,
-    indicativo_fraude
+    indicativo_fraude,
+    bandeira_cartao
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -71,7 +74,8 @@ def _build_prod_record(row):
         hora_transacao,
         dia_transacao,
         mes_transacao,
-        int(row.is_fraud)
+        int(row.is_fraud),
+        row.card_network
     )
 
 

@@ -12,6 +12,7 @@ MERCHANTS = {
     "Carrefour": {"category": "shopping", "min_amount": 25, "max_amount": 350}
 }
 
+CARD_NEWTOWER = ["Visa", "MasterCard", "American Express", "Elo"]
 
 # Gera horario aleatorio dentro da faixa esperada para cada tipo de transacao.
 def _random_timestamp(min_hour, max_hour, max_day_offset):
@@ -23,7 +24,7 @@ def _random_timestamp(min_hour, max_hour, max_day_offset):
     ) - timedelta(days=random.randint(0, max_day_offset))
 
 
-def _build_transaction(customer_id, merchant, amount, timestamp, is_fraud):
+def _build_transaction(customer_id, merchant, amount, timestamp, is_fraud, card_network):
     merchant_info = MERCHANTS[merchant]
 
     return {
@@ -33,7 +34,8 @@ def _build_transaction(customer_id, merchant, amount, timestamp, is_fraud):
         "merchant": merchant,
         "category": merchant_info["category"],
         "timestamp": timestamp.isoformat(),
-        "is_fraud": is_fraud
+        "is_fraud": is_fraud,
+        "card_network": card_network
     }
 
 
@@ -41,9 +43,9 @@ def generate_normal_transaction(customer_id):
     merchant = random.choice(list(MERCHANTS.keys()))
     merchant_info = MERCHANTS[merchant]
     amount = round(random.uniform(merchant_info["min_amount"], merchant_info["max_amount"]), 2)
-    timestamp = _random_timestamp(min_hour=8, max_hour=22, max_day_offset=30)
-
-    return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=0)
+    timestamp = _random_timestamp(min_hour=8, max_hour=22, max_day_offset=365)
+    card_network = random.choice(CARD_NEWTOWER)
+    return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=0, card_network=card_network)
 
 
 # Fraudes sao geradas com ticket mais alto para aumentar sinal no treino supervisionado.
@@ -51,8 +53,8 @@ def generate_fraud_transaction(customer_id):
     merchant = random.choice(list(MERCHANTS.keys()))
     amount = round(random.uniform(4000, 8000), 2)
     timestamp = _random_timestamp(min_hour=8, max_hour=22, max_day_offset=90)
-
-    return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=1)
+    card_network = random.choice(CARD_NEWTOWER)
+    return _build_transaction(customer_id, merchant, amount, timestamp, is_fraud=1, card_network=card_network)
 
 
 def generate_customer_transactions(customer_id):
@@ -63,7 +65,7 @@ def generate_customer_transactions(customer_id):
         transactions.append(generate_normal_transaction(customer_id))
 
     # Mantem uma proporcao de fraude para nao perder representatividade da classe positiva.
-    if random.random() < 0.2:
+    if random.random() < 0.3:
         fraud_count = random.randint(3, 7)
         for _ in range(fraud_count):
             transactions.append(generate_fraud_transaction(customer_id))

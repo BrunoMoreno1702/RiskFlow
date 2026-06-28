@@ -1,5 +1,4 @@
-﻿import pandas as pd
-
+import pandas as pd
 from database.connection import get_connection
 
 INSERT_ORIGIN_SQL = """
@@ -10,9 +9,10 @@ INSERT INTO transactions_origin (
     merchant,
     category,
     [timestamp],
-    is_fraud
+    is_fraud,
+    card_network
 )
-VALUES (?, ?, ?, ?, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 SELECT_EXISTING_ORIGIN_SQL_TEMPLATE = """
@@ -30,7 +30,8 @@ def _validate_required_columns(df: pd.DataFrame):
         "merchant",
         "category",
         "timestamp",
-        "is_fraud"
+        "is_fraud",
+        "card_network"
     ]
 
     missing_columns = [column for column in required_columns if column not in df.columns]
@@ -47,7 +48,8 @@ def _build_origin_record(row):
         str(row["merchant"]),
         str(row["category"]),
         pd.to_datetime(row["timestamp"]).to_pydatetime(),
-        int(row["is_fraud"])
+        int(row["is_fraud"]),
+        str(row["card_network"])
     )
 
 

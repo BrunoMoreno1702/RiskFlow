@@ -6,11 +6,17 @@ import joblib
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, classification_report, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    classification_report,
+    roc_auc_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
 from database.connection import get_connection
+
 
 SELECT_TRAINING_DATA_SQL = """
 SELECT
@@ -22,6 +28,7 @@ FROM transactions_prod
 WHERE indicativo_fraude IN (0, 1);
 """
 
+
 SELECT_SCORING_DATA_SQL = """
 SELECT
     id_transacao,
@@ -30,6 +37,7 @@ SELECT
     data_hora_transacao
 FROM transactions_prod;
 """
+
 
 UPDATE_PREDICTION_SQL = """
 UPDATE transactions_prod
@@ -52,8 +60,19 @@ def load_training_dataframe():
     if dataframe.empty:
         raise ValueError("A tabela transactions_prod não retornou dados para treino.")
 
-    dataframe["data_hora_transacao"] = pd.to_datetime(dataframe["data_hora_transacao"], errors="coerce")
-    dataframe = dataframe.dropna(subset=["id_cliente", "valor", "data_hora_transacao", "indicativo_fraude"])
+    dataframe["data_hora_transacao"] = pd.to_datetime(
+        dataframe["data_hora_transacao"],
+        errors="coerce"
+    )
+
+    dataframe = dataframe.dropna(
+        subset=[
+            "id_cliente",
+            "valor",
+            "data_hora_transacao",
+            "indicativo_fraude",
+        ]
+    )
 
     if dataframe.empty:
         raise ValueError("Não há dados válidos após o pré-processamento inicial.")
@@ -61,9 +80,11 @@ def load_training_dataframe():
     return dataframe
 
 
-# Feature temporal: média de valor dos 7 dias anteriores por cliente (sem vazamento).
 def _compute_customer_recent_average_7d(feature_frame):
-    sorted_frame = feature_frame.sort_values(["id_cliente", "data_hora_transacao"]).copy()
+    sorted_frame = feature_frame.sort_values(
+        ["id_cliente", "data_hora_transacao"]
+    ).copy()
+
     sorted_frame["valor_medio_7d_cliente"] = pd.NA
 
     for _, customer_frame in sorted_frame.groupby("id_cliente", sort=False):
@@ -71,32 +92,49 @@ def _compute_customer_recent_average_7d(feature_frame):
         customer_frame["_orig_index"] = customer_frame.index
 
         rolling_mean = (
-            customer_frame.set_index("data_hora_transacao")["valor"]
-                        # shift(1) garante que a transação atual não use a si mesma no histórico.
-.shift(1)
+            customer_frame
+            .set_index("data_hora_transacao")["valor"]
+            .shift(1)
             .rolling("7D")
             .mean()
             .to_numpy()
         )
 
-        sorted_frame.loc[customer_frame["_orig_index"], "valor_medio_7d_cliente"] = rolling_mean
+        sorted_frame.loc[
+            customer_frame["_orig_index"],
+            "valor_medio_7d_cliente"
+        ] = rolling_mean
 
-    sorted_frame["valor_medio_7d_cliente"] = sorted_frame["valor_medio_7d_cliente"].fillna(sorted_frame["valor"])
+    sorted_frame["valor_medio_7d_cliente"] = (
+        sorted_frame["valor_medio_7d_cliente"]
+        .fillna(sorted_frame["valor"])
+    )
 
     return sorted_frame
 
 
 def build_features_and_target(dataframe):
     feature_frame = dataframe.copy()
+
     feature_frame["hora"] = feature_frame["data_hora_transacao"].dt.hour
     feature_frame["is_madrugada"] = feature_frame["hora"].between(0, 5).astype(int)
+
     feature_frame = _compute_customer_recent_average_7d(feature_frame)
 
-    X = feature_frame[["hora", "is_madrugada", "valor_medio_7d_cliente"]]
+    X = feature_frame[
+        [
+            "hora",
+            "is_madrugada",
+            "valor_medio_7d_cliente",
+        ]
+    ]
+
     y = feature_frame["indicativo_fraude"].astype(int)
 
     if y.nunique() < 2:
-        raise ValueError("Treino supervisionado requer as duas classes (0 e 1) em indicativo_fraude.")
+        raise ValueError(
+            "Treino supervisionado requer as duas classes 0 e 1 em indicativo_fraude."
+        )
 
     return X, y
 
@@ -105,7 +143,14 @@ def build_pipeline():
     return Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("model", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)),
+            (
+                "model",
+                LogisticRegression(
+                    max_iter=1000,
+                    class_weight="balanced",
+                    random_state=42,
+                ),
+            ),
         ]
     )
 
@@ -129,16 +174,25 @@ def train_and_evaluate(test_size):
     predictions = (probabilities >= 0.5).astype(int)
 
     metrics = {
-        "features": ["hora", "is_madrugada", "valor_medio_7d_cliente"],
+        "model_name": "Regressão Logística",
+        "features": [
+            "hora",
+            "is_madrugada",
+            "valor_medio_7d_cliente",
+        ],
+        "accuracy": float(accuracy_score(y_test, predictions)),
         "roc_auc": float(roc_auc_score(y_test, probabilities)),
         "pr_auc": float(average_precision_score(y_test, probabilities)),
-        "classification_report": classification_report(y_test, predictions, digits=4),
+        "classification_report": classification_report(
+            y_test,
+            predictions,
+            digits=4,
+        ),
     }
 
     return pipeline, metrics
 
 
-# Bloco opcional para gravar score e classe prevista na tabela de produção.
 def fill_predictions_in_db(model, threshold=0.5):
     connection = get_connection()
 
@@ -149,8 +203,19 @@ def fill_predictions_in_db(model, threshold=0.5):
             print("Sem dados para scoring na transactions_prod.")
             return
 
-        scoring_df["data_hora_transacao"] = pd.to_datetime(scoring_df["data_hora_transacao"], errors="coerce")
-        scoring_df = scoring_df.dropna(subset=["id_transacao", "id_cliente", "valor", "data_hora_transacao"])
+        scoring_df["data_hora_transacao"] = pd.to_datetime(
+            scoring_df["data_hora_transacao"],
+            errors="coerce"
+        )
+
+        scoring_df = scoring_df.dropna(
+            subset=[
+                "id_transacao",
+                "id_cliente",
+                "valor",
+                "data_hora_transacao",
+            ]
+        )
 
         if scoring_df.empty:
             print("Sem dados válidos para scoring após limpeza.")
@@ -158,15 +223,26 @@ def fill_predictions_in_db(model, threshold=0.5):
 
         scoring_df["hora"] = scoring_df["data_hora_transacao"].dt.hour
         scoring_df["is_madrugada"] = scoring_df["hora"].between(0, 5).astype(int)
+
         scoring_df = _compute_customer_recent_average_7d(scoring_df)
 
-        X_score = scoring_df[["hora", "is_madrugada", "valor_medio_7d_cliente"]]
+        X_score = scoring_df[
+            [
+                "hora",
+                "is_madrugada",
+                "valor_medio_7d_cliente",
+            ]
+        ]
 
         probabilities = model.predict_proba(X_score)[:, 1]
         predictions = (probabilities >= threshold).astype(int)
 
         updates = [
-            (round(float(probability) * 100, 3), int(prediction), str(transaction_id))
+            (
+                round(float(probability) * 100, 3),
+                int(prediction),
+                str(transaction_id),
+            )
             for probability, prediction, transaction_id in zip(
                 probabilities,
                 predictions,
@@ -186,8 +262,17 @@ def fill_predictions_in_db(model, threshold=0.5):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Treina modelo supervisionado de fraude com foco em horário/madrugada.")
-    parser.add_argument("--test-size", type=float, default=0.2, help="Proporção do conjunto de teste.")
+    parser = argparse.ArgumentParser(
+        description="Treina modelo supervisionado de fraude com foco em horário/madrugada."
+    )
+
+    parser.add_argument(
+        "--test-size",
+        type=float,
+        default=0.2,
+        help="Proporção do conjunto de teste.",
+    )
+
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -209,23 +294,24 @@ def main():
     metrics_path = output_dir / "metrics.json"
 
     joblib.dump(model, model_path)
-    metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    metrics_path.write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     print(f"Modelo salvo em: {model_path}")
     print(f"Métricas salvas em: {metrics_path}")
+
     print("\nClassification report:\n")
     print(metrics["classification_report"])
+
+    print(f"Acurácia: {metrics['accuracy']:.4f}")
     print(f"ROC AUC: {metrics['roc_auc']:.4f}")
     print(f"PR AUC: {metrics['pr_auc']:.4f}")
 
-    # Predições do ML no banco:
     fill_predictions_in_db(model, threshold=0.5)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
