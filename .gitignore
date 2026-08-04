@@ -1,6 +1,8 @@
 .env
 .venv/
 data/
+__pycache__/
+*.pyc
 *.csv
 *.pkl
 *.joblib
