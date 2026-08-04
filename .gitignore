@@ -8,3 +8,6 @@ data/
 *.json
 *.pickle
 .pytest_cache/
+__pycache__/
+*.py[cod]
+ml/artifacts/
