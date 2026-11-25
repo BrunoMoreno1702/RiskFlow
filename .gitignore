@@ -1,15 +1,7 @@
 .env
 .venv/
-data/
-__pycache__/
-*.pyc
-*.csv
-*.pkl
-*.joblib
-*.xlsx
-*.json
-*.pickle
-.pytest_cache/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
 ml/artifacts/

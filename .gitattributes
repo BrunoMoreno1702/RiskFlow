@@ -1,0 +1,3 @@
+# Arquivos montados em containers Linux precisam de LF, mesmo em clones no Windows.
+* text=auto eol=lf
+*.png binary

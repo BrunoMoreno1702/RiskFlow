@@ -1,0 +1,16 @@
+[project]
+name = "riskflow"
+version = "2.0.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 110
+extend-exclude = ["dashboard"]  # legado v1, sera reescrito na etapa 4
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]  # padrao do FastAPI: Query()/Depends() em defaults
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

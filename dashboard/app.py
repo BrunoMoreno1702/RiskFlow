@@ -1,12 +1,17 @@
 import json
 import re
+import sys
 from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from database.connection import get_connection
+# `streamlit run dashboard/app.py` so coloca dashboard/ no path; os pacotes ficam na raiz.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ml.model import METADATA_FILE  # noqa: E402
+from pipeline import config, db  # noqa: E402
 
 
 st.set_page_config(page_title="Fraudes - Visão Executiva", layout="wide")
@@ -28,6 +33,12 @@ MESES_PT = {
 }
 
 
+MODEL_LABELS = {
+    "hist_gradient_boosting": "Gradient Boosting",
+    "logistic_regression": "Regressão Logística",
+}
+
+
 CORES_GRAFICOS = {
     "linha": "#3D5A6C",
     "bandeira": "#6F8F72",
@@ -35,35 +46,41 @@ CORES_GRAFICOS = {
 }
 
 
-METRICS_PATH = Path("ml/artifacts/metrics.json")
+METRICS_PATH = config.ARTIFACTS_DIR / METADATA_FILE
 
 
+# Le o mart (camada de consumo) com os scores do modelo. Os aliases mantem os nomes
+# usados pelos componentes visuais do painel.
 SELECT_DASHBOARD_SQL = """
 SELECT
-    id_transacao,
-    id_cliente,
-    estabelecimento,
-    bandeira_cartao,
-    indicativo_fraude,
-    probabilidade_fraude_ml,
-    indicativo_fraude_ml,
-    data_hora_transacao,
-    data_predicao_ml
-FROM dbo.transactions_prod;
+    f.transaction_id  AS id_transacao,
+    f.customer_id     AS id_cliente,
+    f.merchant        AS estabelecimento,
+    f.card_network    AS bandeira_cartao,
+    f.is_fraud        AS indicativo_fraude,
+    s.fraud_score     AS probabilidade_fraude_ml,
+    s.prediction      AS indicativo_fraude_ml,
+    f.event_ts        AS data_hora_transacao,
+    s.scored_at       AS data_predicao_ml
+FROM mart.fct_transactions f
+LEFT JOIN mart.fraud_scores s USING (transaction_id);
 """
 
 
 @st.cache_data(ttl=60)
 def load_transactions_dataframe() -> pd.DataFrame:
-    connection = get_connection()
-
-    try:
-        df = pd.read_sql(SELECT_DASHBOARD_SQL, connection)
-    finally:
-        connection.close()
+    with db.connect() as connection:
+        df = db.fetch_df(connection, SELECT_DASHBOARD_SQL)
 
     if df.empty:
         return df
+
+    # scored_at e TIMESTAMPTZ: converte para horario de Brasilia, sem fuso, para exibicao.
+    df["data_predicao_ml"] = (
+        pd.to_datetime(df["data_predicao_ml"], utc=True)
+        .dt.tz_convert("America/Sao_Paulo")
+        .dt.tz_localize(None)
+    )
 
     df["data_hora_transacao"] = pd.to_datetime(
         df["data_hora_transacao"],
@@ -126,12 +143,19 @@ def clean_text(text: str) -> str:
     return text
 
 
-def render_card(title: str, value: str, subtitle: str, accent_color: str = "#3D5A6C"):
+def render_card(
+    title: str,
+    value: str,
+    subtitle: str,
+    accent_color: str = "#3D5A6C",
+    value_size: str | None = None,
+):
+    value_style = f' style="font-size: {value_size};"' if value_size else ""
     st.markdown(
         f"""
         <div class="card" style="border-top: 4px solid {accent_color};">
             <div class="card-title">{title}</div>
-            <div class="card-value">{value}</div>
+            <div class="card-value"{value_style}>{value}</div>
             <div class="card-subtitle">{subtitle}</div>
         </div>
         """,
@@ -323,11 +347,11 @@ def render_visao_geral(df: pd.DataFrame):
     total_clientes = int(df["id_cliente"].nunique())
     total_transacoes = int(len(df))
 
-    taxa_fraude = (
-        total_fraudes / total_transacoes * 100
-        if total_transacoes > 0
-        else 0
-    )
+    transacoes_avaliadas = int(df["probabilidade_fraude_ml"].notna().sum())
+
+    # Taxa sobre as transacoes pontuadas, como fracao: format_percent multiplica
+    # valores entre 0 e 1 por 100 (antes um valor ja em % era multiplicado de novo).
+    taxa_fraude = total_fraudes / transacoes_avaliadas if transacoes_avaliadas > 0 else 0
 
     col_card_1, col_card_2, col_card_3 = st.columns(3)
 
@@ -341,9 +365,9 @@ def render_visao_geral(df: pd.DataFrame):
 
     with col_card_2:
         render_card(
-            title="Clientes Open Finance",
+            title="Clientes monitorados",
             value=format_number(total_clientes),
-            subtitle="Clientes que compartilharam seus dados de transações para análise",
+            subtitle="Clientes com transações no período processado",
             accent_color="#6F8F72",
         )
 
@@ -356,14 +380,13 @@ def render_visao_geral(df: pd.DataFrame):
         )
 
     risco_medio = df["probabilidade_fraude_ml"].dropna().mean()
-    transacoes_avaliadas = int(df["probabilidade_fraude_ml"].notna().sum())
 
     texto_resumo = (
         f"A base possui {format_number(total_transacoes)} transações analisadas, "
         f"envolvendo {format_number(total_clientes)} clientes únicos. "
         f"Até o momento, foram detectadas {format_number(total_fraudes)} fraudes, "
         f"o que representa uma taxa aproximada de {format_percent(taxa_fraude)} "
-        f"sobre o volume total processado."
+        f"sobre as transações avaliadas pelo modelo."
     )
 
     if transacoes_avaliadas > 0:
@@ -394,16 +417,19 @@ def render_dashboards(df: pd.DataFrame):
         st.warning("Sem dados de fraude para exibir nos dashboards.")
         return
 
+    # Agrupa por ano-mes: os dados podem cruzar a virada do ano.
+    periodo = df_fraudes["data_hora_transacao"].dt.to_period("M")
     serie_tempo = (
         df_fraudes.assign(
-            mes_num=df_fraudes["data_hora_transacao"].dt.month,
-            mes_nome=df_fraudes["data_hora_transacao"].dt.month.map(MESES_PT),
+            periodo=periodo.astype(str),
+            mes_nome=periodo.dt.month.map(MESES_PT) + "/" + periodo.dt.year.astype(str),
         )
-        .groupby(["mes_num", "mes_nome"], as_index=False)
+        .groupby(["periodo", "mes_nome"], as_index=False)
         .size()
         .rename(columns={"size": "qtd_fraudes"})
-        .sort_values("mes_num")
+        .sort_values("periodo")
     )
+    ordem_meses = serie_tempo["mes_nome"].tolist()
 
     fraude_por_bandeira = (
         df_fraudes.assign(
@@ -436,7 +462,7 @@ def render_dashboards(df: pd.DataFrame):
         .encode(
             x=alt.X(
                 "mes_nome:N",
-                sort=list(MESES_PT.values()),
+                sort=ordem_meses,
                 title="Mês",
             ),
             y=alt.Y(
@@ -536,10 +562,12 @@ def render_sistema_risco(df: pd.DataFrame):
 
     metrics = load_model_metrics()
 
-    accuracy = metrics.get("accuracy")
-    roc_auc = metrics.get("roc_auc")
-    pr_auc = metrics.get("pr_auc")
-    model_name = metrics.get("model_name", "Regressão Logística")
+    test_metrics = metrics.get("test_metrics", {})
+    baseline = metrics.get("baseline_amount_p95_test_metrics", {})
+    pr_auc = test_metrics.get("pr_auc")
+    precision = test_metrics.get("precision")
+    recall = test_metrics.get("recall")
+    model_name = MODEL_LABELS.get(metrics.get("model_name"), metrics.get("model_name", "N/A"))
 
     transacoes_com_score = int(df["probabilidade_fraude_ml"].notna().sum())
     fraudes_previstas = int((df["indicativo_fraude_ml"] == 1).sum())
@@ -558,31 +586,34 @@ def render_sistema_risco(df: pd.DataFrame):
         render_card(
             title="Técnica utilizada",
             value=model_name,
-            subtitle="Análise supervisionada",
+            subtitle=f"Versão {metrics.get('model_version', 'N/A')}",
             accent_color="#3D5A6C",
+            value_size="20px",  # nome do modelo e texto, nao cabe no tamanho dos numeros
         )
 
+    # Acuracia fica de fora de proposito: com ~1% de fraude, um modelo que nunca
+    # aponta fraude teria 99% de acuracia. PR-AUC, precision e recall dizem mais.
     with col_card_2:
         render_card(
-            title="Acurácia",
-            value=format_percent(accuracy),
-            subtitle="Resultado médio de validação",
+            title="PR AUC (teste)",
+            value=format_percent(pr_auc),
+            subtitle=f"Regra simples (valor > p95): {format_percent(baseline.get('pr_auc'))}",
             accent_color="#6F8F72",
         )
 
     with col_card_3:
         render_card(
-            title="ROC AUC",
-            value=format_percent(roc_auc),
-            subtitle="Separação entre transações normais e suspeitas",
+            title="Precision",
+            value=format_percent(precision),
+            subtitle="Dos alertas, quantos eram fraude",
             accent_color="#8A7356",
         )
 
     with col_card_4:
         render_card(
-            title="PR AUC",
-            value=format_percent(pr_auc),
-            subtitle="Desempenho na identificação de fraudes",
+            title="Recall",
+            value=format_percent(recall),
+            subtitle="Das fraudes, quantas foram detectadas",
             accent_color="#596B7A",
         )
 
@@ -592,12 +623,12 @@ def render_sistema_risco(df: pd.DataFrame):
 
     with col_info_1:
         texto_sistema = """
-        O sistema avalia cada transação considerando o comportamento do cliente,
-        o horário da compra e o histórico recente de movimentações. A partir dessa análise,
-        ele calcula o nível de risco e indica se a transação parece normal ou suspeita.
+        O modelo compara cada transação com o histórico do próprio cliente nos últimos
+        30 dias: quantas compras ele fez na última hora e nas últimas 24 horas, quanto costuma
+        gastar, se a categoria é nova para ele e se a compra aconteceu de madrugada.
 
-        Sempre que uma nova análise é executada, os resultados são atualizados na base de dados,
-        permitindo que o painel mostre informações mais recentes sobre risco e possíveis fraudes.
+        O pipeline diário no Airflow pontua as transações de cada dia, e o modelo é re-treinado
+        toda semana. As métricas ao lado foram medidas em dias posteriores aos usados no treino.
         """
 
         render_info_panel(
@@ -620,8 +651,8 @@ def render_sistema_risco(df: pd.DataFrame):
 
     if not metrics:
         st.warning(
-            "O arquivo de métricas não foi encontrado ou não pôde ser lido. "
-            "Execute o treino novamente para gerar os indicadores do sistema de risco."
+            "Modelo ainda não treinado. Rode a DAG riskflow_train no Airflow "
+            "ou `docker compose run --rm pipeline train`."
         )
 
 
