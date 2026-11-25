@@ -5,6 +5,7 @@
     python -m pipeline.run backfill --start 2026-08-01 --end 2026-10-31
     python -m pipeline.run train
     python -m pipeline.run score --date 2026-11-01
+    python -m pipeline.run score --start 2026-06-01 --end 2026-09-30   # re-pontua um periodo
 """
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ def main() -> None:
     backfill.add_argument("--end", type=date.fromisoformat, required=True)
     sub.add_parser("train")
     score = sub.add_parser("score")
-    score.add_argument("--date", type=date.fromisoformat, required=True)
+    score.add_argument("--date", type=date.fromisoformat)
+    score.add_argument("--start", type=date.fromisoformat)
+    score.add_argument("--end", type=date.fromisoformat)
 
     args = parser.parse_args()
 
@@ -63,7 +66,14 @@ def main() -> None:
         metadata = train_from_mart(config.ARTIFACTS_DIR)
         log.info("Metricas de teste: %s", metadata["test_metrics"])
     elif args.command == "score":
-        steps.score(args.date)
+        start, end = (args.date, args.date) if args.date else (args.start, args.end)
+        if start is None or end is None:
+            parser.error("score exige --date ou --start e --end")
+        day, total = start, 0
+        while day <= end:
+            total += steps.score(day)
+            day += timedelta(days=1)
+        log.info("score: %s transacoes pontuadas de %s a %s", total, start, end)
 
 
 if __name__ == "__main__":
