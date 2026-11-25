@@ -1,0 +1,9 @@
+# Dependencias do pipeline/treino instaladas na imagem do Airflow.
+# Sem FastAPI/uvicorn: o Airflow 3 ja traz as proprias versoes.
+requests==2.32.3
+python-dotenv==1.1.0
+psycopg[binary]==3.2.9
+pandas==2.2.3
+numpy==2.2.5
+scikit-learn==1.6.1
+joblib==1.4.2

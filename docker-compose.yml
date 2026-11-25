@@ -1,0 +1,111 @@
+# RiskFlow - ambiente local completo.
+#   docker compose up -d --build        sobe Postgres, APIs e Airflow
+#   docker compose run --rm pipeline backfill --start 2026-06-01 --end 2026-09-30
+# Credenciais abaixo sao apenas para desenvolvimento local.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://riskflow:riskflow@postgres:5432/riskflow
+  SOURCE_API_URL: http://source-api:8001
+  ARTIFACTS_DIR: /artifacts
+
+services:
+  postgres:
+    image: postgres:16.16
+    environment:
+      POSTGRES_USER: riskflow
+      POSTGRES_PASSWORD: riskflow
+      POSTGRES_DB: riskflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/001_airflow.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U riskflow -d riskflow"]
+      interval: 5s
+      retries: 10
+
+  # Aplica o schema do projeto (idempotente) antes de qualquer outra coisa usar o banco.
+  db-init:
+    build: .
+    environment: *app-env
+    command: ["python", "-m", "pipeline.run", "init-db"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  source-api:
+    build: .
+    command: ["uvicorn", "source_api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      retries: 5
+
+  inference-api:
+    build: .
+    environment: *app-env
+    command: ["uvicorn", "ml.inference_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - artifacts:/artifacts
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  # CLI do pipeline para execucoes pontuais: docker compose run --rm pipeline <comando>
+  pipeline:
+    build: .
+    environment: *app-env
+    entrypoint: ["python", "-m", "pipeline.run"]
+    volumes:
+      - artifacts:/artifacts
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      source-api:
+        condition: service_healthy
+    profiles: ["cli"]
+
+  # Airflow em modo standalone (scheduler + api-server + dag-processor + triggerer
+  # em um container), com LocalExecutor e metadados no Postgres. Adequado para
+  # desenvolvimento local; em producao cada componente rodaria separado.
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    command: ["standalone"]
+    environment:
+      <<: *app-env
+      PYTHONPATH: /opt/riskflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/riskflow/dags
+      # Somente para uso local: qualquer acesso a UI entra como admin, sem login.
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    volumes:
+      - ./dags:/opt/riskflow/dags:ro
+      - ./pipeline:/opt/riskflow/pipeline:ro
+      - ./ml:/opt/riskflow/ml:ro
+      - ./sql:/opt/riskflow/sql:ro
+      - artifacts:/artifacts
+    ports:
+      - "8080:8080"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      source-api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  artifacts:

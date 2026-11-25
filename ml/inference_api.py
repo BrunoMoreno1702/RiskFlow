@@ -15,19 +15,29 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from ml.features import HISTORY_WINDOW, build_features
-from ml.model import FraudModel, ModelNotTrainedError, load_model
-from pipeline import db
+from ml.model import METADATA_FILE, FraudModel, ModelNotTrainedError, load_model
+from pipeline import config, db
 
-state: dict[str, FraudModel] = {}
+state: dict = {}
+
+
+def current_model() -> FraudModel | None:
+    """Recarrega o modelo quando o treino semanal publica uma versao nova."""
+    metadata_path = config.ARTIFACTS_DIR / METADATA_FILE
+    mtime = metadata_path.stat().st_mtime if metadata_path.exists() else None
+    if mtime != state.get("mtime"):
+        try:
+            state["model"] = load_model()
+        except ModelNotTrainedError:
+            # Sobe mesmo sem modelo: /health informa o estado e /predict devolve 503.
+            state["model"] = None
+        state["mtime"] = mtime
+    return state.get("model")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    try:
-        state["model"] = load_model()
-    except ModelNotTrainedError:
-        # Sobe mesmo sem modelo: /health informa o estado e /predict devolve 503.
-        pass
+    current_model()
     yield
     state.clear()
 
@@ -47,13 +57,13 @@ class TransactionIn(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    model = state.get("model")
+    model = current_model()
     return {"status": "ok", "model_loaded": model is not None, "model_version": model and model.version}
 
 
 @app.post("/predict")
 def predict(tx: TransactionIn) -> dict:
-    model = state.get("model")
+    model = current_model()
     if model is None:
         raise HTTPException(status_code=503, detail="Modelo ainda nao treinado.")
 
