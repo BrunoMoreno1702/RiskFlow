@@ -1,130 +1,77 @@
-# ML_Fraude
+# RiskFlow
 
-Projeto com API + ETL + Machine Learning supervisionado + Streamlit para detecção de fraude em transações.
+Pipeline de dados incremental para transações de cartão, com detecção de fraude como consumidor final.
 
-A API gera transações sintéticas, o ETL carrega os dados em camadas (`transactions_origin` e `transactions_prod`), o modelo usa a coluna `indicativo_fraude` para treino e predição, e o Streamlit disponibiliza uma webpage com relatórios, insights e visão geral dos resultados.
+> **Status: v2 em construção.** A fase 1 está concluída: pipeline, camadas, qualidade de dados, ML e testes.
+> Ainda faltam o `docker compose`, a DAG do Airflow, o CI e a adaptação do dashboard.
 
-# Tecnologias utilizadas
+## Arquitetura
 
-* **Python**
-* **FastAPI + Uvicorn**
-* **SQL Server**
-* **Pandas + NumPy**
-* **Scikit-learn**
-* **Streamlit**
-* **Python-dotenv**
-* **Babel**
-* **joblib**
-
-# Pré-requisitos
-
-* Python instalado
-* SQL Server rodando localmente
-* Driver ODBC do SQL Server instalado (ex.: `ODBC Driver 18 for SQL Server`)
-
-# Scripts SQL
-
-Criação das tabelas origin e prod:
-
-```sql
-CREATE TABLE dbo.transactions_origin (
-    transaction_id VARCHAR(50) NOT NULL PRIMARY KEY,
-    customer_id VARCHAR(50) NOT NULL,
-    amount DECIMAL(18,2) NOT NULL,
-    merchant VARCHAR(120) NOT NULL,
-    category VARCHAR(80) NOT NULL,
-    [timestamp] DATETIME2(7) NOT NULL,
-    is_fraud BIT NOT NULL
-);
-
-CREATE TABLE dbo.transactions_prod (
-    id_transacao VARCHAR(50) NOT NULL PRIMARY KEY,
-    id_cliente VARCHAR(50) NOT NULL,
-    valor DECIMAL(18,2) NOT NULL,
-    estabelecimento VARCHAR(120) NOT NULL,
-    categoria VARCHAR(80) NOT NULL,
-    data_hora_transacao DATETIME2(7) NOT NULL,
-    hora_transacao TIME(0) NOT NULL,
-    dia_transacao VARCHAR(5) NOT NULL,
-    mes_transacao VARCHAR(20) NOT NULL,
-    indicativo_fraude BIT NOT NULL
-);
+```mermaid
+flowchart LR
+    A[Source API<br/>transações por dia] -->|extract| B[(raw.transactions<br/>JSONB como chegou)]
+    B -->|normalize + quality checks| C[(staging.transactions<br/>tipado e deduplicado)]
+    C -->|features point-in-time| D[(mart.fct_transactions)]
+    D -->|train semanal| M[[modelo + metadata]]
+    M -->|score diário| E[(mart.fraud_scores)]
+    M --> F[Inference API<br/>/predict]
+    C -. histórico do cliente .-> F
 ```
 
-# Como rodar o projeto localmente
+## Decisões de projeto
 
-1. Clone o repositório e entre na pasta raiz.
+| Decisão | Motivo |
+|---|---|
+| **Processamento incremental por dia** | Cada execução processa apenas a sua data lógica. Isso permite agendar, reprocessar um dia e fazer backfill. |
+| **Idempotência por substituição de partição** | Cada etapa apaga e regrava o dia, dentro de uma transação. Reexecutar não duplica dados. |
+| **Origem determinística** | A mesma data sempre devolve as mesmas transações, com IDs UUIDv5. Isso torna o reprocessamento confiável. |
+| **Camada `raw` com o payload original** | O `raw` é a fonte da verdade. Uma mudança na transformação pode ser reaplicada sem consultar a origem de novo. |
+| **Qualidade de dados bloqueante** | Se uma checagem falha, o dia inteiro é rejeitado antes da staging. Um dia faltando é visível e alertável; um dia errado contamina o mart. |
+| **Features point-in-time compartilhadas** | `ml/features.py` usa só transações anteriores e é a mesma função no batch, no treino e na API online. Isso evita vazamento de dados e divergência entre treino e produção. |
+| **Split temporal por dia e seleção por PR-AUC** | A fraude representa cerca de 1% das transações, então acurácia não diz nada. O modelo é avaliado em dias posteriores aos de treino. |
+| **Baseline obrigatório** | O modelo é comparado com a regra "valor acima do p95". Se não superar a regra, não se justifica. |
 
-2. Crie e ative o ambiente virtual:
+## Resultados (dados sintéticos, 120 dias, ~84 mil transações)
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+| | PR-AUC (teste) | Precision | Recall |
+|---|---|---|---|
+| Regra: valor > p95 | 0.063 | 0.069 | 0.355 |
+| **HistGradientBoosting** | **0.935** | **0.958** | **0.760** |
+
+**Limitações, ditas com honestidade:**
+- Os dados são sintéticos. Os padrões de fraude (rajadas de compras pequenas, valores fora do perfil do cliente) são mais limpos do que no mundo real, então essas métricas são otimistas.
+- O rótulo de fraude chega junto com a transação. Na prática, ele chega dias depois, por chargeback.
+
+## Como rodar (fase 1, sem Docker)
+
+Requer Python 3.12 e PostgreSQL.
+
+```bash
+pip install -r requirements-dev.txt
+cp .env.example .env                       # ajuste DATABASE_URL
+
+uvicorn source_api.main:app --port 8001    # terminal 1: sistema de origem
+python -m pipeline.run init-db
+python -m pipeline.run backfill --start 2026-06-01 --end 2026-09-30
+python -m pipeline.run train
+python -m pipeline.run daily --date 2026-10-01
+uvicorn ml.inference_api:app --port 8000   # API de inferência
 ```
 
-3. Instale as dependências:
+Testes e lint:
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```bash
+pytest
+ruff check .
 ```
 
-4. Crie o arquivo `.env` na raiz:
+## Estrutura
 
-```env
-API_URL=http://127.0.0.1:8000/transactions
-SQL_DRIVER=ODBC Driver 18 for SQL Server
-SQL_SERVER=localhost
-SQL_DATABASE=ml_previsao_fraude
-SQL_TRUSTED_CONNECTION=yes
-SQL_ENCRYPT=yes
-SQL_TRUST_SERVER_CERTIFICATE=yes
 ```
-
-5. Suba a API:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload
+source_api/   sistema de origem simulado (gerador determinístico + FastAPI)
+pipeline/     extract, transform, quality, steps (raw -> staging -> mart) e CLI
+ml/           features, treino, carregamento do modelo, API de inferência
+sql/          schema versionado (idempotente)
+tests/        testes unitários e de ponta a ponta do treino
+dashboard/    Streamlit (legado da v1, será adaptado ao mart)
 ```
-
-6. Rode o ETL:
-
-Observação sobre volume de dados:
-
-* A geração de fraude é probabilística, então nem todo cliente terá fraude.
-* Para aumentar a chance de aparecerem casos de fraude no lote, o recomendado é rodar com pelo menos 50 customers.
-
-```powershell
-.\.venv\Scripts\python.exe -m etl.run_etl --customers 50
-```
-
-7. Treine o modelo supervisionado:
-
-```powershell
-.\.venv\Scripts\python.exe -m ml.train_supervised
-```
-
-Arquivos gerados no treino:
-
-* `ml/artifacts/fraud_model.joblib`
-* `ml/artifacts/metrics.json`
-
-8. Rode a webpage com Streamlit:
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run dashboard/app.py
-```
-
-# Dashboard com Streamlit
-
-O projeto também conta com uma webpage em Streamlit para visualização dos dados tratados e dos resultados do modelo.
-
-A dashboard apresenta relatórios e insights como:
-
-* visão geral das transações;
-* volume total de transações;
-* quantidade de fraudes;
-* categorias com maior volume de fraude;
-* análise das predições do modelo;
-* informações sobre a acurácia do modelo.
-
-O Streamlit consome os dados já tratados, utiliza Pandas para montar os DataFrames e apresenta os resultados em formato de dashboard.
