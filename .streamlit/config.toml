@@ -1,0 +1,3 @@
+# O CSS do painel usa cores fixas para fundo claro.
+[theme]
+base = "light"

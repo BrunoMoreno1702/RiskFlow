@@ -12,6 +12,8 @@ COPY source_api ./source_api
 COPY pipeline ./pipeline
 COPY ml ./ml
 COPY sql ./sql
+COPY dashboard ./dashboard
+COPY .streamlit ./.streamlit
 
 # Mesmo UID/GID do usuario da imagem oficial do Airflow (50000:0): os dois
 # containers escrevem e leem o volume compartilhado de artefatos do modelo.

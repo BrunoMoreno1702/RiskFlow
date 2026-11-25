@@ -61,6 +61,18 @@ services:
       db-init:
         condition: service_completed_successfully
 
+  dashboard:
+    build: .
+    environment: *app-env
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    volumes:
+      - artifacts:/artifacts:ro
+    ports:
+      - "8501:8501"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
   # CLI do pipeline para execucoes pontuais: docker compose run --rm pipeline <comando>
   pipeline:
     build: .

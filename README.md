@@ -5,14 +5,12 @@ Pipeline de dados incremental para transações de cartão, com detecção de fr
 Orquestrado com **Apache Airflow 3**, em camadas no **PostgreSQL**, com checagens de qualidade bloqueantes,
 features point-in-time e CI de ponta a ponta. Tudo sobe com um comando.
 
-> **Pendente:** o dashboard Streamlit (`dashboard/`) ainda é o da v1 e será adaptado ao mart.
-
 ## Rodando em 5 minutos
 
 Requer Docker. Use 8 GB de RAM livres para o Docker.
 
 ```bash
-docker compose up -d --build                     # Postgres, Source API, Inference API e Airflow
+docker compose up -d --build                     # Postgres, APIs, Airflow e dashboard
 
 # Carga histórica: 4 meses, cerca de 85 mil transações, em ~2 min
 docker compose run --rm pipeline backfill --start 2026-06-01 --end 2026-09-30
@@ -22,6 +20,7 @@ docker compose run --rm pipeline train
 | Serviço | Endereço |
 |---|---|
 | Airflow UI (dev, sem login) | http://localhost:8080 |
+| Dashboard (Streamlit) | http://localhost:8501 |
 | Inference API (Swagger) | http://localhost:8000/docs |
 | Source API (Swagger) | http://localhost:8001/docs |
 | PostgreSQL | `localhost:5432`, usuário/senha `riskflow` |
@@ -120,5 +119,5 @@ sql/          schema versionado (idempotente)
 tests/        testes unitários e de ponta a ponta do treino
 dags/         DAGs do Airflow (só orquestram; a lógica está em pipeline/ e ml/)
 docker/       imagem do Airflow e init do Postgres
-dashboard/    Streamlit (legado da v1, será adaptado ao mart)
+dashboard/    Streamlit lendo o mart: visão geral, gráficos de fraude e métricas do modelo
 ```
